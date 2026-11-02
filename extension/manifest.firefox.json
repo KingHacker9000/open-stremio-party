@@ -3,9 +3,11 @@
   "name": "Open Stremio Party",
   "short_name": "Watch Party",
   "description": "Watch together on Stremio Web with a self-hosted party server.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "permissions": [
-    "storage"
+    "storage",
+    "activeTab",
+    "scripting"
   ],
   "action": {
     "default_title": "Watch Party"
@@ -26,5 +28,10 @@
       "id": "open-stremio-party@extensions.local",
       "strict_min_version": "128.0"
     }
+  },
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
   }
 }
