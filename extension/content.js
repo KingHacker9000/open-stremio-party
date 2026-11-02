@@ -1,6 +1,7 @@
 /* Open Stremio Party: playback adapter. Leave native player controls untouched. */
 (() => {
   'use strict';
+  // Re-running an already injected script shouldn't create duplicate UI.
   if (window.__OPEN_STREMIO_PARTY_LOADED__) return;
   window.__OPEN_STREMIO_PARTY_LOADED__ = true;
 
@@ -79,9 +80,18 @@
     el('notice').textContent = text || '';
   }
   function openPanel(value) {
+    if (!host.isConnected) (document.body || document.documentElement).append(host);
     el('panel').hidden = !value;
     el('toggle').setAttribute('aria-expanded', String(value));
+    console.info('[Open Stremio Party] panel', value ? 'opened' : 'closed');
   }
+  // The browser toolbar action opens this same panel, not a second UI.
+  chrome.runtime?.onMessage?.addListener((message, _sender, reply) => {
+    if (message?.type !== 'open-stremio-party:toggle') return false;
+    openPanel(el('panel').hidden);
+    reply?.({ ok: true });
+    return false;
+  });
   // Toggle on pointerup so the panel opens even if the page consumes the subsequent click.
   // Preserve native keyboard and assistive-technology click behavior.
   let ignorePointerClickUntil = 0;
@@ -360,6 +370,8 @@
   });
 
   setInterval(() => {
+    // Stremio is a single-page app; recover if a page transition replaces body.
+    if (!host.isConnected) (document.body || document.documentElement).append(host);
     detectVideo();
     if (state.connected && state.host) onLocalChange(); // host heartbeat maintains authority
     else if (state.connected && state.pending && state.mode === 'host' && state.hostOnline) {
@@ -397,5 +409,6 @@
     if (code) { el('room').value = code; if (state.server) start(false, code); }
     detectVideo(); render();
   }
-  init();
+  console.info('[Open Stremio Party] ready');
+  init().catch(error => console.error('[Open Stremio Party] initialization failed', error));
 })();
