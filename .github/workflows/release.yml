@@ -47,7 +47,7 @@ jobs:
             TAG="$GITHUB_REF_NAME"
             EXTRA=()
           else
-            TAG="v0.1.0-preview.1"
+            TAG="v0.1.1-preview.1"
             EXTRA=(--prerelease)
           fi
           if gh release view "$TAG" >/dev/null 2>&1; then
