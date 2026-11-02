@@ -9,7 +9,8 @@ ROOT = Path(__file__).resolve().parent.parent
 for browser in ('chrome', 'firefox'):
     output = ROOT / 'dist' / browser
     output.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(ROOT / 'extension' / 'content.js', output / 'content.js')
+    for filename in ('content.js', 'background.js'):
+        shutil.copyfile(ROOT / 'extension' / filename, output / filename)
     manifest = json.loads((ROOT / 'extension' / f'manifest.{browser}.json').read_text())
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     archive = ROOT / 'dist' / f'open-stremio-party-{browser}.zip'
