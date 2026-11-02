@@ -27,7 +27,8 @@
 
   const host = document.createElement('div');
   host.id = 'open-stremio-party-root';
-  host.style.cssText = 'position:fixed;top:40vh;right:12px;z-index:2147483600;pointer-events:none;';
+  // Only the visible 42px button has a clickable footprint.
+  host.style.cssText = 'position:fixed;top:40vh;right:12px;width:42px;height:42px;z-index:2147483600;pointer-events:auto;';
   const shadow = host.attachShadow({ mode: 'closed' });
   const stylesheet = document.createElement('style');
   stylesheet.textContent = `
@@ -48,6 +49,7 @@
   `;
   shadow.append(stylesheet);
   const root = document.createElement('div');
+  root.style.cssText = 'width:42px;height:42px;pointer-events:none;';
   root.innerHTML = `
     <button class="bubble" id="toggle" title="Party" aria-label="Open Party" aria-expanded="false">◉</button>
     <section class="panel" id="panel" hidden aria-label="Party">
@@ -80,8 +82,12 @@
     el('panel').hidden = !value;
     el('toggle').setAttribute('aria-expanded', String(value));
   }
-  el('toggle').addEventListener('click', () => {
-    if (state.dragged) { state.dragged = false; return; }
+  // Toggle on pointerup so the panel opens even if the page consumes the subsequent click.
+  // Preserve native keyboard and assistive-technology click behavior.
+  let ignorePointerClickUntil = 0;
+  el('toggle').addEventListener('click', event => {
+    event.stopPropagation();
+    if (event.detail !== 0 && performance.now() < ignorePointerClickUntil) return;
     openPanel(el('panel').hidden);
   });
   el('close').addEventListener('click', () => openPanel(false));
@@ -94,6 +100,7 @@
   let drag = null;
   el('toggle').addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
+    e.stopPropagation();
     drag = { x: e.clientX, y: e.clientY, top: host.getBoundingClientRect().top, left: host.getBoundingClientRect().left, moved: false };
     el('toggle').setPointerCapture(e.pointerId);
   });
@@ -105,14 +112,23 @@
     const left = Math.max(0, Math.min(innerWidth - 42, drag.left + dx));
     const top = Math.max(0, Math.min(innerHeight - 42, drag.top + dy));
     host.style.left = `${left}px`; host.style.right = 'auto'; host.style.top = `${top}px`;
-    state.dragged = true;
     // Position panel on the *inside* of the viewport after moving the bubble.
     el('panel').style.right = left < innerWidth / 2 ? 'auto' : '50px';
     el('panel').style.left = left < innerWidth / 2 ? '50px' : 'auto';
   });
-  el('toggle').addEventListener('pointerup', () => {
-    if (drag?.moved) {
+  el('toggle').addEventListener('pointerup', event => {
+    if (!drag) return;
+    event.stopPropagation();
+    // Avoid toggling twice when a pointerup is followed by a synthetic click.
+    ignorePointerClickUntil = performance.now() + 350;
+    if (drag.moved) {
       storage.set({ bubblePosition: { left: parseInt(host.style.left, 10), top: parseInt(host.style.top, 10) } });
+    } else {
+      const bounds = el('toggle').getBoundingClientRect();
+      if (event.clientX >= bounds.left && event.clientX <= bounds.right &&
+          event.clientY >= bounds.top && event.clientY <= bounds.bottom) {
+        openPanel(el('panel').hidden);
+      }
     }
     drag = null;
   });
