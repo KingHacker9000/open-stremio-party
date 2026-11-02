@@ -3,7 +3,7 @@
   "name": "Open Stremio Party",
   "short_name": "Watch Party",
   "description": "Watch together on Stremio Web with a self-hosted party server.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "permissions": [
     "storage"
   ],
