@@ -1,0 +1,12 @@
+:root{color-scheme:dark;font:16px/1.5 system-ui,Arial,sans-serif;background:#090b12;color:#f5f5fc}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 90% 2%,#26234c,transparent 65%),#090b12}
+main{max-width:600px;margin:0 auto;padding:clamp(76px,15vh,160px) 24px 48px}
+.mark,.eyebrow{font-weight:700;letter-spacing:.15em;color:#aaa0ff;font-size:12px}
+h1{font-size:clamp(48px,9vw,72px);line-height:1.05;letter-spacing:-.055em;margin:26px 0 36px}
+section{border:1px solid #ffffff20;background:#ffffff08;border-radius:16px;padding:24px;margin:0 0 28px}
+.code{font-size:clamp(26px,7vw,42px);font-weight:800;letter-spacing:.11em;margin-top:8px;overflow-wrap:anywhere}
+a.primary{display:inline-block;background:#6a5dee;color:white;text-decoration:none;font-weight:650;border-radius:12px;padding:14px 24px}
+a.primary:focus-visible{outline:2px solid white;outline-offset:4px}
+p{color:#a4aabc;font-size:14px;margin-top:22px}
+
+p a{color:#b7b0ff;font-size:14px}

@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Open Stremio Party",
+  "short_name": "Watch Party",
+  "description": "Watch together on Stremio Web with a self-hosted party server.",
+  "version": "0.1.0",
+  "permissions": [
+    "storage"
+  ],
+  "action": {
+    "default_title": "Watch Party"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://web.stremio.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "open-stremio-party@extensions.local",
+      "strict_min_version": "128.0"
+    }
+  }
+}

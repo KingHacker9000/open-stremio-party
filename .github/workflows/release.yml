@@ -1,0 +1,63 @@
+name: Extension bundles
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test
+        run: |
+          python -m pip install -r requirements.txt pytest pytest-asyncio
+          pytest -q
+          node --check extension/content.js
+          node --check static/landing.js
+      - name: Build extensions
+        run: python scripts/build_extensions.py
+      - name: Check packages
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import zipfile
+          for browser in ('chrome', 'firefox'):
+              path=Path('dist') / f'open-stremio-party-{browser}.zip'
+              with zipfile.ZipFile(path) as z:
+                  manifest=json.loads(z.read('manifest.json'))
+                  source=z.read('content.js').decode()
+                  assert manifest['name']=='Open Stremio Party'
+                  assert 'partyServer' in source
+                  assert 'https://party.example.com' not in source
+          PY
+      - name: Publish tagged or preview release
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            TAG="$GITHUB_REF_NAME"
+            EXTRA=()
+          else
+            TAG="v0.1.0-preview.1"
+            EXTRA=(--prerelease)
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.zip --clobber
+          else
+            gh release create "$TAG" dist/*.zip --target "$GITHUB_SHA" \
+              --title "$TAG" "${EXTRA[@]}" \
+              --notes "Chrome and Firefox extension bundles. The Firefox ZIP is for testing; a signed XPI is required for normal installation."
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension-bundles
+          path: dist/*.zip

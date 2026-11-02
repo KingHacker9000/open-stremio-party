@@ -1,0 +1,33 @@
+services:
+  party:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PARTY_PORT:-8787}:8787"
+    volumes:
+      - ./data:/data
+    environment:
+      BASE_URL: ${BASE_URL:?Set BASE_URL in your private .env file}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://web.stremio.com}
+      MAX_ROOMS: ${MAX_ROOMS:-200}
+      MAX_PEERS: ${MAX_PEERS:-16}
+      RELEASES_URL: ${RELEASES_URL:-}
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 64
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
