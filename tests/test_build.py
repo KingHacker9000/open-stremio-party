@@ -23,6 +23,6 @@ def test_reproducible_extension_packages():
                 for info in archive.infolist():
                     assert info.date_time == (2020, 1, 1, 0, 0, 0)
                 for name in ('content.js', 'background.js'):
-                    assert archive.read(name) == (ROOT / 'extension' / name).read_bytes()
+                    assert archive.read(name) == (ROOT / 'extension' / name).read_text(encoding='utf-8').encode('utf-8')
         hashes.append(current)
     assert hashes[0] == hashes[1]

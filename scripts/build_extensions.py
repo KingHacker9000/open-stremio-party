@@ -3,7 +3,6 @@
 from pathlib import Path
 from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
 import json
-import shutil
 
 ROOT = Path(__file__).resolve().parent.parent
 for browser in ('chrome', 'firefox'):
@@ -11,7 +10,8 @@ for browser in ('chrome', 'firefox'):
     output.mkdir(parents=True, exist_ok=True)
     filenames = ('content.js', 'background.js', 'manifest.json')
     for filename in filenames[:2]:
-        shutil.copyfile(ROOT / 'extension' / filename, output / filename)
+        source = (ROOT / 'extension' / filename).read_text(encoding='utf-8')
+        (output / filename).write_bytes(source.encode('utf-8'))
     manifest = json.loads((ROOT / 'extension' / f'manifest.{browser}.json').read_text())
     (output / 'manifest.json').write_bytes((json.dumps(manifest, indent=2) + '\n').encode('utf-8'))
     archive = ROOT / 'dist' / f'open-stremio-party-{browser}.zip'
