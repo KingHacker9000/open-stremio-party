@@ -2,7 +2,7 @@
 
 Self-hosted watch parties for Stremio Web. Chrome and Firefox browser extensions synchronize playback, room presence and text chat without carrying video or Stremio credentials through the party server.
 
-**Status:** Preview 0.1.3. Automated Chromium and Firefox tests cover two-viewer HTML5 playback against the real party server. The unpacked Chromium extension is also smoke-tested on live Stremio Web. Full playback with actual Stremio sources and Firefox extension installation/signing still need validation. Not affiliated with Stremio.
+**Status:** Preview 0.1.3. Automated Chromium and Firefox tests cover two-viewer HTML5 playback against the real party server. Live Chrome testing with two separate profiles verified synchronized Stremio playback, chat, control modes, rejoining and fullscreen using a public HTTPS clip. Source compatibility and Firefox extension installation/signing remain limitations; see [live verification](LIVE_VERIFICATION.md). Not affiliated with Stremio.
 
 ## Quick start
 
