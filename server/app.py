@@ -114,12 +114,12 @@ class PartyApp:
                 del self.creation_attempts[ip]
 
     def load(self, code):
-        if code in self.rooms:
-            return self.rooms[code]
         record = self.db.execute("SELECT host_hash,mode FROM rooms WHERE code=? AND expires_at>?",
                                  (code, int(time.time()))).fetchone()
         if not record:
             return None
+        if code in self.rooms:
+            return self.rooms[code]
         room = Room(code, record[0], record[1])
         self.rooms[code] = room
         return room
@@ -160,19 +160,20 @@ class PartyApp:
         if not name:
             await ws.send_json({"type": "error", "message": "Nickname must be 1–24 characters."})
             return False
-        if len(room.clients) >= MAX_PEERS:
-            await ws.send_json({"type": "error", "message": "Room is full."})
-            return False
         key = msg.get("hostToken")
         host = (isinstance(key, str) and hmac.compare_digest(token_hash(key), room.host_hash)) or token is not None
+        # A host reconnect may replace its old connection even in a full room.
+        replacing = [old_ws for old_ws, old in list(room.clients.items()) if host and old.host]
+        if len(room.clients) - len(replacing) >= MAX_PEERS:
+            await ws.send_json({"type": "error", "message": "Room is full."})
+            return False
         peer_id = msg.get("peerId")
         if not isinstance(peer_id, str) or not re.fullmatch(r"[a-f0-9-]{16,40}", peer_id):
             peer_id = secrets.token_hex(12)
         if host:
             # A duplicated/reloaded host tab cannot create two competing leaders.
-            for old_ws, old in list(room.clients.items()):
-                if old.host:
-                    await old_ws.close(code=4001, message=b"Host connected in another tab")
+            for old_ws in replacing:
+                await old_ws.close(code=4001, message=b"Host connected in another tab")
         peer = Peer(ws, peer_id, name, host)
         room.clients[ws] = peer
         self.db.execute("UPDATE rooms SET expires_at=? WHERE code=?",
@@ -306,6 +307,8 @@ class PartyApp:
                     media = state.get("mediaId")
                     if position is None or duration is None or speed is None or type(paused) is not bool:
                         continue
+                    if duration <= 0 or position > duration:
+                        continue
                     if media is not None and (not isinstance(media, str) or not MEDIA_RE.fullmatch(media)):
                         media = None
                     if time.monotonic() - room.last_db_touch > 60:
@@ -345,8 +348,13 @@ async def create_app(db_path=DB_PATH):
     app.router.add_get("/robots.txt", robots)
     app.router.add_get("/public-config", public_config)
     app.router.add_static("/static/", HERE / "static", show_index=False)
+    async def close_sockets(app):
+        sockets = [ws for room in service.rooms.values() for ws in list(room.clients)]
+        await asyncio.gather(*(ws.close(code=1001, message=b"Server restarting") for ws in sockets))
+
     async def close_db(app):
         app[PARTY_KEY].db.close()
+    app.on_shutdown.append(close_sockets)
     app.on_cleanup.append(close_db)
     return app
 

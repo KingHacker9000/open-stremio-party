@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic Chrome and Firefox WebExtension source ZIPs."""
 from pathlib import Path
-from zipfile import ZipFile, ZIP_DEFLATED
+from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
 import json
 import shutil
 
@@ -9,12 +9,17 @@ ROOT = Path(__file__).resolve().parent.parent
 for browser in ('chrome', 'firefox'):
     output = ROOT / 'dist' / browser
     output.mkdir(parents=True, exist_ok=True)
-    for filename in ('content.js', 'background.js'):
+    filenames = ('content.js', 'background.js', 'manifest.json')
+    for filename in filenames[:2]:
         shutil.copyfile(ROOT / 'extension' / filename, output / filename)
     manifest = json.loads((ROOT / 'extension' / f'manifest.{browser}.json').read_text())
-    (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    (output / 'manifest.json').write_bytes((json.dumps(manifest, indent=2) + '\n').encode('utf-8'))
     archive = ROOT / 'dist' / f'open-stremio-party-{browser}.zip'
     with ZipFile(archive, 'w', ZIP_DEFLATED) as z:
-        for path in sorted(output.glob('*')):
-            z.write(path, path.name)
+        for filename in sorted(filenames):
+            info = ZipInfo(filename, date_time=(2020, 1, 1, 0, 0, 0))
+            info.compress_type = ZIP_DEFLATED
+            info.create_system = 3
+            info.external_attr = 0o100644 << 16
+            z.writestr(info, (output / filename).read_bytes())
     print(archive)

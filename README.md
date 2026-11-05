@@ -2,7 +2,7 @@
 
 Self-hosted watch parties for Stremio Web. Chrome and Firefox browser extensions synchronize playback, room presence and text chat without carrying video or Stremio credentials through the party server.
 
-**Status:** Preview. Browser-to-browser playback and extension-store signing still need end-to-end validation. Not affiliated with Stremio.
+**Status:** Preview 0.1.3. Automated Chromium and Firefox tests cover two-viewer HTML5 playback against the real party server. The unpacked Chromium extension is also smoke-tested on live Stremio Web. Full playback with actual Stremio sources and Firefox extension installation/signing still need validation. Not affiliated with Stremio.
 
 ## Quick start
 
@@ -37,7 +37,16 @@ python -m pip install -r requirements.txt pytest pytest-asyncio
 pytest -q
 python scripts/build_extensions.py
 node --check extension/content.js
+npm ci
+npx playwright install chromium firefox
+npm test
 ```
+
+The browser suite uses a generated 90-second WebM, independent browser sessions, and the real WebSocket server. It covers setup, invitations, play/pause/seek/speed, chat escaping, host and shared controls, reconnects, host replacement, episode mismatches, replacement video elements, clock skew, fullscreen, panel positioning and native controls. Extension APIs are simulated in these playback tests; a separate Chromium test loads the actual built extension and exercises its background worker. Set `PARTY_LIVE_SMOKE=1` when running `npx playwright test --project=chromium -g "built Chromium"` to use live Stremio Web for that smoke test. No Stremio account or stream is used by this check.
+
+Chromium tests grant local-network access only to their isolated test context so an HTTPS test page can contact the loopback server. Production deployments should use the HTTPS server URL described above. The suite does not alter your browser profile or permissions.
+
+Pull requests run the same checks in CI. Source ZIPs are reproducible and contain only the manifest and the two extension scripts. Chrome ZIPs must be extracted before loading the unpacked extension; the Firefox ZIP remains unsigned.
 
 Development server: `PARTY_DB=/tmp/party-test.sqlite BASE_URL=http://localhost:8787 python -m server.app`.
 

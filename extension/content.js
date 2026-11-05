@@ -16,20 +16,20 @@
   }
   const socketUrl = server => new URL('/ws', server).href.replace(/^http/, 'ws');
   const ROOM_PATTERN = /^[A-HJ-NP-Z2-9]{10}$/;
-  const storage = chrome.storage.local;
+  const storage = (typeof browser !== 'undefined' ? browser : chrome).storage.local;
   const clientId = sessionStorage.getItem('openStremioPartyClientId') || crypto.randomUUID();
   sessionStorage.setItem('openStremioPartyClientId', clientId);
   const state = {
     ws: null, connected: false, code: null, create: false, host: false, mode: 'host',
     hostOnline: false, nickname: 'Guest', hostKeys: {}, peers: [], messages: [],
-    pending: null, video: null, suppressUntil: 0, lastSeq: 0, retry: null,
+    pending: null, video: null, suppressUntil: 0, applied: null, lastSeq: 0, retry: null, localChange: null,
     retryCount: 0, manualDisconnect: false, bubble: null, server: null, inviteUrl: null, showSettings: false,
   };
 
   const host = document.createElement('div');
   host.id = 'open-stremio-party-root';
   // Only the visible 42px button has a clickable footprint.
-  host.style.cssText = 'position:fixed;top:40vh;right:12px;width:42px;height:42px;z-index:2147483600;pointer-events:auto;';
+  host.style.cssText = 'all:initial;display:block;font:13px/1.35 system-ui,Arial,sans-serif;color:#ebedf5;color-scheme:dark;position:fixed;top:40vh;right:12px;width:42px;height:42px;overflow:visible;z-index:2147483600;pointer-events:auto;';
   const shadow = host.attachShadow({ mode: 'closed' });
   const stylesheet = document.createElement('style');
   stylesheet.textContent = `
@@ -75,6 +75,26 @@
   (document.body || document.documentElement).append(host);
 
   const el = id => root.querySelector('#' + id);
+  function placePanel() {
+    const bounds = host.getBoundingClientRect();
+    el('panel').style.right = bounds.left < innerWidth / 2 ? 'auto' : '50px';
+    el('panel').style.left = bounds.left < innerWidth / 2 ? '50px' : 'auto';
+    const height = el('panel').getBoundingClientRect().height;
+    el('panel').style.top = `${Math.min(0, Math.max(-bounds.top, innerHeight - bounds.top - height - 8))}px`;
+  }
+  function mountPanel() {
+    const parent = document.fullscreenElement || document.body || document.documentElement;
+    if (host.parentNode !== parent) parent.append(host);
+    placePanel();
+  }
+  document.addEventListener('fullscreenchange', mountPanel);
+  window.addEventListener('resize', () => {
+    const bounds = host.getBoundingClientRect();
+    host.style.left = `${Math.max(0, Math.min(innerWidth - 42, bounds.left))}px`;
+    host.style.right = 'auto';
+    host.style.top = `${Math.max(0, Math.min(innerHeight - 42, bounds.top))}px`;
+    placePanel();
+  });
   function notice(text) {
     el('notice').hidden = !text;
     el('notice').textContent = text || '';
@@ -82,6 +102,7 @@
   function openPanel(value) {
     if (!host.isConnected) (document.body || document.documentElement).append(host);
     el('panel').hidden = !value;
+    placePanel();
     el('toggle').setAttribute('aria-expanded', String(value));
     console.info('[Open Stremio Party] panel', value ? 'opened' : 'closed');
   }
@@ -101,6 +122,11 @@
     openPanel(el('panel').hidden);
   });
   el('close').addEventListener('click', () => openPanel(false));
+  for (const type of ['keydown', 'keyup']) el('panel').addEventListener(type, event => {
+    // Shadow DOM retargets inputs to the outer div. Keep typing out of player shortcuts.
+    event.stopPropagation();
+    if (type === 'keydown' && event.key === 'Escape') { openPanel(false); el('toggle').focus(); }
+  });
   el('settings').addEventListener('click', () => {
     state.showSettings = !state.showSettings;
     render();
@@ -125,6 +151,7 @@
     // Position panel on the *inside* of the viewport after moving the bubble.
     el('panel').style.right = left < innerWidth / 2 ? 'auto' : '50px';
     el('panel').style.left = left < innerWidth / 2 ? '50px' : 'auto';
+    placePanel();
   });
   el('toggle').addEventListener('pointerup', event => {
     if (!drag) return;
@@ -163,19 +190,22 @@
     el('inside').hidden = !hasRoom;
     el('modeSection').hidden = !state.host;
     el('serverSetup').hidden = !!state.server && !state.showSettings;
-    el('create').disabled = !state.server;
-    el('join').disabled = !state.server;
+    const configured = state.server && !state.showSettings || validServer(el('server').value.trim());
+    el('create').disabled = !configured;
+    el('join').disabled = !configured;
     el('mode').value = state.mode;
     el('code').textContent = state.code || '';
     el('members').textContent = state.peers.length ? `${state.peers.length} watching` : 'Connecting…';
     if (hasRoom && !state.connected) notice('Reconnecting…');
     el('toggle').classList.toggle('online', state.connected);
     el('playerState').hidden = !!state.video || !hasRoom;
+    placePanel();
   }
   function saveNick() {
     state.nickname = (el('nickname').value.trim().replace(/\s+/g, ' ') || 'Guest').slice(0, 24);
     storage.set({ nickname: state.nickname });
   }
+  el('server').addEventListener('input', render);
   function send(message) {
     if (state.ws?.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify(message));
   }
@@ -189,6 +219,13 @@
     state.manualDisconnect = false;
     state.create = create;
     state.connected = false;
+    state.host = false;
+    state.hostOnline = false;
+    state.pending = null;
+    state.lastSeq = 0;
+    state.messages = [];
+    state.inviteUrl = null;
+    if (state.localChange) clearTimeout(state.localChange);
     state.retryCount = create ? 0 : state.retryCount;
     state.code = create ? null : code;
     render();
@@ -205,9 +242,12 @@
       let msg;
       try { msg = JSON.parse(event.data); } catch { return; }
       if (msg.type === 'error') {
-        notice(msg.message || 'Server error');
-        if (/not found|expired/i.test(msg.message || '')) { state.code = null; saveRoom(null); }
-        render(); return;
+        state.manualDisconnect = true;
+        state.code = null;
+        state.connected = false;
+        saveRoom(null);
+        socket.close(1000, 'Join rejected');
+        render(); notice(msg.message || 'Server error'); return;
       }
       if (msg.type === 'joined') {
         state.code = msg.code;
@@ -243,9 +283,17 @@
         }
       }
     });
-    socket.addEventListener('close', () => {
+    socket.addEventListener('close', event => {
       if (state.ws !== socket) return;
       state.connected = false;
+      if (event.code === 4001) {
+        state.manualDisconnect = true;
+        state.code = null; state.host = false; state.pending = null;
+        saveRoom(null);
+        state.peers = []; render();
+        notice('Host connected in another tab. This tab has left the party.');
+        return;
+      }
       state.peers = []; render();
       if (state.manualDisconnect) return;
       if (!state.code) {
@@ -307,6 +355,7 @@
     if (best === state.video) return;
     if (state.video) {
       for (const event of ['play', 'pause', 'seeked', 'ratechange']) state.video.removeEventListener(event, onLocalChange);
+      state.video.removeEventListener('loadedmetadata', onVideoLoaded);
     }
     state.video = best;
     if (best) {
@@ -328,13 +377,22 @@
     const snapshot = getState();
     if (snapshot) send({ type: 'sync', state: snapshot });
   }
-  function onLocalChange() {
-    if (Date.now() < state.suppressUntil) return;
-    broadcastState();
+  function onLocalChange(event) {
+    if (Date.now() < state.suppressUntil) {
+      const applied = state.applied, v = state.video;
+      if (!event || applied?.video === v && (
+        event.type === 'seeked' && Math.abs(v.currentTime - applied.position) < 0.2 ||
+        ['play', 'pause'].includes(event.type) && v.paused === applied.paused ||
+        event.type === 'ratechange' && Math.abs(v.playbackRate - applied.speed) < 0.005
+      )) return;
+    }
+    // Coalesce rapid seek/play/pause events so server throttling cannot lose the final action.
+    if (state.localChange) clearTimeout(state.localChange);
+    state.localChange = setTimeout(() => { state.localChange = null; broadcastState(); }, 150);
   }
   function applySync(snapshot, force = false) {
     if (!state.connected || (state.mode === 'host' && !state.hostOnline)) return;
-    if (state.host && state.mode === 'host' && !force) return; // Host-only mode does not let guests move the leader.
+    if (state.host && state.mode === 'host') return;
     const v = state.video;
     if (!v || !Number.isFinite(v.duration) || v.duration <= 0) return;
     const currentMedia = mediaId();
@@ -346,13 +404,13 @@
     }
     // Never compare a server clock to a client clock: users' devices may disagree by minutes.
     // Incoming snapshots are normalized at receipt; elapsed time uses a monotonic local clock.
-    const elapsed = snapshot.paused ? 0 : Math.min(30, Math.max(0, (performance.now() - (snapshot.receivedAt ?? performance.now())) / 1000));
-    const target = Math.min(Math.max(0, snapshot.position + elapsed * snapshot.speed), v.duration - 0.05);
+    const elapsed = snapshot.paused ? 0 : Math.max(0, (performance.now() - (snapshot.receivedAt ?? performance.now())) / 1000);
+    const target = Math.max(0, Math.min(snapshot.position + elapsed * snapshot.speed, v.duration - 0.05));
     const delta = target - v.currentTime;
     state.suppressUntil = Date.now() + 1000;
     try {
       if (force || Math.abs(delta) > 1.4) v.currentTime = target;
-      const rate = Math.abs(delta) > 0.25 && Math.abs(delta) <= 1.4
+      const rate = !snapshot.paused && Math.abs(delta) > 0.25 && Math.abs(delta) <= 1.4
         ? snapshot.speed * (1 + Math.max(-0.04, Math.min(0.04, delta * 0.06)))
         : snapshot.speed;
       if (Math.abs(v.playbackRate - rate) > 0.005) v.playbackRate = rate;
@@ -360,6 +418,7 @@
       else if (!snapshot.paused && v.paused) {
         Promise.resolve(v.play()).catch(() => notice('Click Play once to allow synchronized playback (browser autoplay policy).'));
       }
+      state.applied = { video: v, position: v.currentTime, paused: snapshot.paused, speed: v.playbackRate };
       if (state.connected) notice('');
     } catch { notice('Could not control this video player; try a browser-playable source.'); }
   }
@@ -371,12 +430,12 @@
 
   setInterval(() => {
     // Stremio is a single-page app; recover if a page transition replaces body.
-    if (!host.isConnected) (document.body || document.documentElement).append(host);
+    mountPanel();
     detectVideo();
-    if (state.connected && state.host) onLocalChange(); // host heartbeat maintains authority
+    if (state.connected && state.host && !state.video?.seeking && state.video?.readyState >= 3) onLocalChange();
     else if (state.connected && state.pending && state.mode === 'host' && state.hostOnline) {
       // Recover when the video element appeared after room join; otherwise follow incoming syncs.
-      if (state.video && Date.now() < state.pending.serverTs + 8000 && state.lastSeq <= 1) applySync(state.pending);
+      if (state.video) applySync(state.pending);
     }
   }, 1800);
 
