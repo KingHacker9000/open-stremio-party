@@ -21,7 +21,7 @@ const vm = require('node:vm');
       },
     },
     scripting: { executeScript: async args => {
-      assert.equal(JSON.stringify(args.files), JSON.stringify(['content.js']));
+      assert.equal(JSON.stringify(args.files), JSON.stringify(['torrent.js', 'content.js']));
       calls.push(['inject']); injected = true;
     } },
   };

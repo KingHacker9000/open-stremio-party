@@ -1,0 +1,25 @@
+{
+  "name": "open-stremio-party",
+  "version": "0.2.0",
+  "description": "Self-hosted watch parties for Stremio Web. Chrome and Firefox browser extensions synchronize playback, room presence and text chat without carrying video or Stremio credentials through the party server.",
+  "scripts": {
+    "test": "python scripts/build_extensions.py && node tests/browser_action.test.cjs && node tests/torrent.test.cjs && playwright test",
+    "test:e2e": "playwright test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KingHacker9000/open-stremio-party.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/KingHacker9000/open-stremio-party/issues"
+  },
+  "homepage": "https://github.com/KingHacker9000/open-stremio-party#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.64.1"
+  },
+  "private": true
+}
