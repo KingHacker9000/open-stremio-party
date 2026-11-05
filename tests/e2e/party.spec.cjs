@@ -51,7 +51,7 @@ async function viewer(browser, { configured = true, room = null } = {}) {
   const url = new URL(STREMIO);
   if (configured) url.searchParams.set('partyServer', SERVER);
   if (room) url.searchParams.set('partyRoom', room);
-  url.hash = '/player/tt1234567';
+  url.hash = '/player/encoded-stream/series/tt1234567/tt1234567%3A1%3A9';
   await page.goto(url.href);
   await page.waitForFunction(() => document.querySelector('video').readyState >= 3);
   await page.evaluate(source);
@@ -173,13 +173,13 @@ test('episode mismatch is safe and a replacement video recovers despite clock sk
     await expect.poll(() => text(guest.page, 'members')).toBe('2 watching');
     await guest.page.evaluate(() => {
       const realNow = Date.now; Date.now = () => realNow() + 300000;
-      location.hash = '/player/tt7654321';
+      location.hash = '/player/encoded-stream/series/tt1234567/tt1234567%3A1%3A10';
     });
     await media(host.page, { position: 30 });
     await expect.poll(() => text(guest.page, 'notice')).toContain('Different title/episode');
     expect(await value(guest.page, 'currentTime')).toBe(0);
     await guest.page.evaluate(() => {
-      location.hash = '/player/tt1234567';
+      location.hash = '/player/encoded-stream/series/tt1234567/tt1234567%3A1%3A9';
       const video = document.querySelector('video');
       video.replaceWith(video.cloneNode(true));
     });

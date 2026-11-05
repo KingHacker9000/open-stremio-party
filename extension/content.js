@@ -343,8 +343,11 @@
 
   function mediaId() {
     // Share only a public Stremio/IMDb content identifier, never source URL or credentials.
-    const matches = (location.pathname + location.hash).match(/(?:tt\d{5,12}(?::\d+:\d+)?)/i);
-    return matches ? matches[0] : null;
+    // Real player routes contain both the series ID and a URI-encoded episode ID.
+    const ids = (location.pathname + location.hash).split(/[/?#]/).map(part => {
+      try { return decodeURIComponent(part); } catch { return ''; }
+    }).filter(part => /^tt\d{5,12}(?::\d+:\d+)?$/i.test(part));
+    return ids.length ? ids[ids.length - 1].toLowerCase() : null;
   }
   function detectVideo() {
     const videos = Array.from(document.querySelectorAll('video'));
@@ -354,12 +357,12 @@
     })[0] || null;
     if (best === state.video) return;
     if (state.video) {
-      for (const event of ['play', 'pause', 'seeked', 'ratechange']) state.video.removeEventListener(event, onLocalChange);
+      for (const event of ['play', 'pause', 'seeking', 'seeked', 'ratechange']) state.video.removeEventListener(event, onLocalChange);
       state.video.removeEventListener('loadedmetadata', onVideoLoaded);
     }
     state.video = best;
     if (best) {
-      for (const event of ['play', 'pause', 'seeked', 'ratechange']) best.addEventListener(event, onLocalChange);
+      for (const event of ['play', 'pause', 'seeking', 'seeked', 'ratechange']) best.addEventListener(event, onLocalChange);
       best.addEventListener('loadedmetadata', onVideoLoaded, { once: true });
       if (state.pending) applySync(state.pending, true);
     }
@@ -381,7 +384,7 @@
     if (Date.now() < state.suppressUntil) {
       const applied = state.applied, v = state.video;
       if (!event || applied?.video === v && (
-        event.type === 'seeked' && Math.abs(v.currentTime - applied.position) < 0.2 ||
+        ['seeking', 'seeked'].includes(event.type) && Math.abs(v.currentTime - applied.position) < 0.2 ||
         ['play', 'pause'].includes(event.type) && v.paused === applied.paused ||
         event.type === 'ratechange' && Math.abs(v.playbackRate - applied.speed) < 0.005
       )) return;
@@ -395,6 +398,8 @@
     if (state.host && state.mode === 'host') return;
     const v = state.video;
     if (!v || !Number.isFinite(v.duration) || v.duration <= 0) return;
+    // Preserve a user's in-flight shared-control edit until its trailing sync is sent.
+    if (!force && state.mode === 'everyone' && (state.localChange || v.seeking)) return;
     const currentMedia = mediaId();
     if (snapshot.mediaId && currentMedia && snapshot.mediaId !== currentMedia) {
       notice('Different title/episode detected. Open the same video as the host.'); return;
@@ -432,7 +437,9 @@
     // Stremio is a single-page app; recover if a page transition replaces body.
     mountPanel();
     detectVideo();
-    if (state.connected && state.host && !state.video?.seeking && state.video?.readyState >= 3) onLocalChange();
+    if (state.connected && state.host && !state.video?.seeking && state.video?.readyState >= 3) {
+      if (!state.localChange && Date.now() >= state.suppressUntil) broadcastState();
+    }
     else if (state.connected && state.pending && state.mode === 'host' && state.hostOnline) {
       // Recover when the video element appeared after room join; otherwise follow incoming syncs.
       if (state.video) applySync(state.pending);
