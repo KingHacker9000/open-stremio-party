@@ -8,8 +8,9 @@ ROOT = Path(__file__).resolve().parent.parent
 for browser in ('chrome', 'firefox'):
     output = ROOT / 'dist' / browser
     output.mkdir(parents=True, exist_ok=True)
-    filenames = ('content.js', 'background.js', 'manifest.json')
-    for filename in filenames[:2]:
+    scripts = ('torrent.js', 'content.js', 'background.js')
+    filenames = (*scripts, 'manifest.json')
+    for filename in scripts:
         source = (ROOT / 'extension' / filename).read_text(encoding='utf-8')
         (output / filename).write_bytes(source.encode('utf-8'))
     manifest = json.loads((ROOT / 'extension' / f'manifest.{browser}.json').read_text())

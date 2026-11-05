@@ -1,5 +1,7 @@
 # Live verification of preview 0.1.3
 
+Historical scope: this session tested timing sync after both viewers opened a source. It did **not** test automatic torrent opening. Preview 0.2.0 adds that behavior with a server/extension update and separate automated regression coverage; the new flow still needs live torrent-download verification.
+
 The built Chrome extension was tested in two separate Chrome profiles against a deployed HTTPS party server, with real Stremio Web 6.0.7 and a local Stremio streaming server reporting 4.22.3. No extension APIs or page player were mocked during this live session.
 
 The reproducible playback source was the [Sintel trailer used by W3C's media demonstration](https://www.w3.org/2010/05/video/mediaevents.html), opened through Stremio's **Search or paste link** input using a paste action. The clip is 52.208333 seconds long. Each viewer opened the source independently; the party server did not distribute a stream URL.

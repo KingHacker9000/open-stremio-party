@@ -1,9 +1,9 @@
 {
   "name": "open-stremio-party",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Self-hosted watch parties for Stremio Web. Chrome and Firefox browser extensions synchronize playback, room presence and text chat without carrying video or Stremio credentials through the party server.",
   "scripts": {
-    "test": "python scripts/build_extensions.py && node tests/browser_action.test.cjs && playwright test",
+    "test": "python scripts/build_extensions.py && node tests/browser_action.test.cjs && node tests/torrent.test.cjs && playwright test",
     "test:e2e": "playwright test"
   },
   "repository": {

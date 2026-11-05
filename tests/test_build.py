@@ -17,12 +17,12 @@ def test_reproducible_extension_packages():
             bundle = ROOT / 'dist' / f'open-stremio-party-{browser}.zip'
             current.append(hashlib.sha256(bundle.read_bytes()).hexdigest())
             with ZipFile(bundle) as archive:
-                assert set(archive.namelist()) == {'manifest.json', 'content.js', 'background.js'}
+                assert set(archive.namelist()) == {'manifest.json', 'torrent.js', 'content.js', 'background.js'}
                 manifest = json.loads(archive.read('manifest.json'))
                 assert manifest == json.loads((ROOT / 'extension' / f'manifest.{browser}.json').read_text())
                 for info in archive.infolist():
                     assert info.date_time == (2020, 1, 1, 0, 0, 0)
-                for name in ('content.js', 'background.js'):
+                for name in ('torrent.js', 'content.js', 'background.js'):
                     assert archive.read(name) == (ROOT / 'extension' / name).read_text(encoding='utf-8').encode('utf-8')
         hashes.append(current)
     assert hashes[0] == hashes[1]

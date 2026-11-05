@@ -17,6 +17,7 @@
   const socketUrl = server => new URL('/ws', server).href.replace(/^http/, 'ws');
   const ROOM_PATTERN = /^[A-HJ-NP-Z2-9]{10}$/;
   const storage = (typeof browser !== 'undefined' ? browser : chrome).storage.local;
+  const torrent = window.OpenStremioPartyTorrent;
   const clientId = sessionStorage.getItem('openStremioPartyClientId') || crypto.randomUUID();
   sessionStorage.setItem('openStremioPartyClientId', clientId);
   const state = {
@@ -24,6 +25,7 @@
     hostOnline: false, nickname: 'Guest', hostKeys: {}, peers: [], messages: [],
     pending: null, video: null, suppressUntil: 0, applied: null, lastSeq: 0, retry: null, localChange: null,
     retryCount: 0, manualDisconnect: false, bubble: null, server: null, inviteUrl: null, showSettings: false,
+    features: [], navigation: null, mediaContext: null, selectionGeneration: 0, selectionTimer: null,
   };
 
   const host = document.createElement('div');
@@ -63,7 +65,7 @@
       </div>
       <div id="inside" hidden>
         <div class="room-code" id="code"></div>
-        <div class="row"><button id="copy">Invite</button><button id="resync" class="secondary">Sync</button><button id="leave" class="secondary">Leave</button></div>
+        <div class="row"><button id="copy">Invite</button><button id="resync" class="secondary" title="Open the host's torrent and align playback">Sync</button><button id="leave" class="secondary">Leave</button></div>
         <div class="section"><div class="muted tiny" id="members"></div><div class="sub" id="playerState" hidden>Open a video to sync</div></div>
         <div class="section" id="modeSection" hidden><select id="mode" aria-label="Playback control"><option value="host">Host controls</option><option value="everyone">Everyone controls</option></select></div>
         <div class="section"><div class="messages" id="messages" role="log" aria-label="Chat" aria-live="polite"></div>
@@ -225,6 +227,8 @@
     state.lastSeq = 0;
     state.messages = [];
     state.inviteUrl = null;
+    state.features = []; state.navigation = null; state.selectionGeneration++;
+    if (state.selectionTimer) clearTimeout(state.selectionTimer);
     if (state.localChange) clearTimeout(state.localChange);
     state.retryCount = create ? 0 : state.retryCount;
     state.code = create ? null : code;
@@ -242,6 +246,8 @@
       let msg;
       try { msg = JSON.parse(event.data); } catch { return; }
       if (msg.type === 'error') {
+        if (state.selectionTimer) { clearTimeout(state.selectionTimer); state.selectionTimer = null; }
+        if (state.connected || msg.fatal === false) { notice(msg.message || 'Server error'); return; }
         state.manualDisconnect = true;
         state.code = null;
         state.connected = false;
@@ -254,6 +260,7 @@
         state.connected = true;
         state.host = !!msg.host;
         state.mode = msg.mode;
+        state.features = msg.features || [];
         state.retryCount = 0;
         state.peers = msg.roster.peers;
         state.hostOnline = msg.roster.hostOnline;
@@ -274,6 +281,13 @@
         state.mode = msg.mode || 'host'; render();
       } else if (msg.type === 'chat') {
         state.messages.push(msg); renderChat();
+      } else if (msg.type === 'selection-request' && state.host) {
+        publishSelection(msg.peerId).catch(() => notice('Could not read this torrent selection.'));
+      } else if (msg.type === 'selection-sent') {
+        notice(msg.torrent ? `Torrent sent to ${msg.recipients} viewer(s).` : 'Playback synced. This source must be opened manually; automatic opening supports torrents.');
+      } else if (msg.type === 'selection' && !state.host) {
+        if (state.selectionTimer) { clearTimeout(state.selectionTimer); state.selectionTimer = null; }
+        followSelection(msg, socket).catch(() => notice('Could not open the host\'s torrent. Try Sync again.'));
       } else if (msg.type === 'sync') {
         const snapshot = msg.state;
         if (snapshot && snapshot.seq > state.lastSeq) {
@@ -285,6 +299,7 @@
     });
     socket.addEventListener('close', event => {
       if (state.ws !== socket) return;
+      if (state.selectionTimer) { clearTimeout(state.selectionTimer); state.selectionTimer = null; }
       state.connected = false;
       if (event.code === 4001) {
         state.manualDisconnect = true;
@@ -325,6 +340,8 @@
     state.ws?.close(1000, 'Left room');
     state.ws = null; state.code = null; state.host = false; state.connected = false;
     state.peers = []; state.pending = null; state.lastSeq = 0; state.inviteUrl = null;
+    state.navigation = null; state.selectionGeneration++;
+    if (state.selectionTimer) clearTimeout(state.selectionTimer);
     saveRoom(null); notice(''); render();
   });
   el('mode').addEventListener('change', () => { if (state.host) send({ type: 'mode', value: el('mode').value }); });
@@ -347,7 +364,8 @@
     const ids = (location.pathname + location.hash).split(/[/?#]/).map(part => {
       try { return decodeURIComponent(part); } catch { return ''; }
     }).filter(part => /^tt\d{5,12}(?::\d+:\d+)?$/i.test(part));
-    return ids.length ? ids[ids.length - 1].toLowerCase() : null;
+    return ids.length ? ids[ids.length - 1].toLowerCase()
+      : state.mediaContext?.hash === location.hash ? state.mediaContext.mediaId : null;
   }
   function detectVideo() {
     const videos = Array.from(document.querySelectorAll('video'));
@@ -364,14 +382,22 @@
     if (best) {
       for (const event of ['play', 'pause', 'seeking', 'seeked', 'ratechange']) best.addEventListener(event, onLocalChange);
       best.addEventListener('loadedmetadata', onVideoLoaded, { once: true });
-      if (state.pending) applySync(state.pending, true);
+      onVideoLoaded();
     }
     render();
   }
-  function onVideoLoaded() { if (state.pending) applySync(state.pending, true); }
+  function onVideoLoaded() {
+    const nav = state.navigation, v = state.video;
+    if (nav && !nav.ready && location.hash === nav.hash && v && v.readyState >= 1 &&
+        (v !== nav.previousVideo || v.currentSrc !== nav.previousSrc)) {
+      nav.ready = true;
+      nav.previousVideo = null; nav.previousSrc = null;
+    }
+    if (state.pending) applySync(state.pending, true);
+  }
   function getState() {
     const v = state.video;
-    if (!v || !Number.isFinite(v.duration) || v.duration <= 0) return null;
+    if (!v || !Number.isFinite(v.duration) || v.duration <= 0 || state.navigation && !state.navigation.ready) return null;
     return { position: v.currentTime, duration: v.duration, paused: v.paused,
       speed: v.playbackRate, mediaId: mediaId() };
   }
@@ -396,6 +422,7 @@
   function applySync(snapshot, force = false) {
     if (!state.connected || (state.mode === 'host' && !state.hostOnline)) return;
     if (state.host && state.mode === 'host') return;
+    if (state.navigation && !state.navigation.ready) return;
     const v = state.video;
     if (!v || !Number.isFinite(v.duration) || v.duration <= 0) return;
     // Preserve a user's in-flight shared-control edit until its trailing sync is sent.
@@ -427,16 +454,61 @@
       if (state.connected) notice('');
     } catch { notice('Could not control this video player; try a browser-playable source.'); }
   }
+  async function publishSelection(targetPeer) {
+    const socket = state.ws, hash = location.hash;
+    const source = await torrent.read(hash);
+    if (state.ws !== socket || !state.connected || !state.host || location.hash !== hash) return;
+    send({ type: 'select', source, mediaId: mediaId(), state: getState(), targetPeer });
+  }
+  async function followSelection(message, socket) {
+    const generation = ++state.selectionGeneration, oldHash = location.hash;
+    const source = torrent.clean(message.source);
+    if (message.source && !source) { notice('The host sent an invalid torrent selection.'); return; }
+    const current = source ? await torrent.read(oldHash) : null;
+    if (state.ws !== socket || !state.connected || generation !== state.selectionGeneration || location.hash !== oldHash) return;
+    state.pending = message.state ? { ...message.state, receivedAt: performance.now() } : null;
+    if (message.state) state.lastSeq = Math.max(state.lastSeq, message.state.seq || 0);
+    if (!source) {
+      if (state.pending) applySync(state.pending, true);
+      notice('The host is not on a shareable torrent. Open their source manually to sync playback.');
+      return;
+    }
+    if (torrent.same(source, current)) {
+      if (state.pending) applySync(state.pending, true);
+      notice('Same torrent selected; playback synced.'); return;
+    }
+    const hash = await torrent.route(source);
+    if (state.ws !== socket || !state.connected || generation !== state.selectionGeneration || location.hash !== oldHash) return;
+    const id = typeof message.mediaId === 'string' && /^tt\d{5,12}(?::\d+:\d+)?$/i.test(message.mediaId) ? message.mediaId : null;
+    state.mediaContext = { hash, mediaId: id };
+    sessionStorage.setItem('openStremioPartyMedia', JSON.stringify(state.mediaContext));
+    state.navigation = { hash, ready: false, previousVideo: state.video, previousSrc: state.video?.currentSrc };
+    state.video?.addEventListener('loadedmetadata', onVideoLoaded, { once: true });
+    if (state.localChange) { clearTimeout(state.localChange); state.localChange = null; }
+    notice('Opening the host\'s torrent… Playback will sync when it is ready.');
+    location.hash = hash;
+  }
   el('resync').addEventListener('click', () => {
-    if (state.host) { broadcastState(); notice('Your playback position was broadcast.'); }
-    else if (state.pending) { applySync(state.pending, true); }
-    else notice('No synchronized playback state is available yet.');
+    if (!state.connected) { notice('Connect to a room first.'); return; }
+    if (!state.features.includes('torrent-selection')) {
+      if (state.host) broadcastState();
+      else if (state.pending) applySync(state.pending, true);
+      notice('Update the party server to open the same torrent. This server only supports playback timing.'); return;
+    }
+    if (state.host) publishSelection().catch(() => notice('Could not read this torrent selection.'));
+    else {
+      send({ type: 'request-selection' });
+      notice('Requesting the host\'s current torrent…');
+      if (state.selectionTimer) clearTimeout(state.selectionTimer);
+      state.selectionTimer = setTimeout(() => { state.selectionTimer = null; notice('The host did not respond. They may need to update their extension.'); }, 8000);
+    }
   });
 
   setInterval(() => {
     // Stremio is a single-page app; recover if a page transition replaces body.
     mountPanel();
     detectVideo();
+    if (state.navigation && location.hash !== state.navigation.hash) state.navigation = null;
     if (state.connected && state.host && !state.video?.seeking && state.video?.readyState >= 3) {
       if (!state.localChange && Date.now() >= state.suppressUntil) broadcastState();
     }
@@ -447,6 +519,7 @@
   }, 1800);
 
   async function init() {
+    try { state.mediaContext = JSON.parse(sessionStorage.getItem('openStremioPartyMedia') || 'null'); } catch { /* ignore */ }
     try {
       const saved = await storage.get(['nickname', 'hostKeys', 'bubblePosition', 'partyServer']);
       state.nickname = saved.nickname || `Guest-${Math.floor(Math.random() * 900 + 100)}`;

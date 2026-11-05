@@ -16,7 +16,7 @@ async function toggleInTab(tab) {
     // Content scripts aren't injected into existing tabs when an extension
     // is newly installed/reloaded. Inject on demand without reloading video.
     try {
-      await api.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+      await api.scripting.executeScript({ target: { tabId: tab.id }, files: ['torrent.js', 'content.js'] });
       await api.tabs.sendMessage(tab.id, TOGGLE);
     } catch (error) {
       console.error('[Open Stremio Party] failed to open panel', error);

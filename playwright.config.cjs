@@ -12,7 +12,7 @@ module.exports = defineConfig({
   webServer: {
     command: `"${process.env.PYTHON || (fs.existsSync(localPython) ? localPython : 'python')}" -m server.app`,
     url: 'http://127.0.0.1:18787/healthz', reuseExistingServer: false,
-    env: { PORT: '18787', BASE_URL: 'http://127.0.0.1:18787',
+    env: { PORT: '18787', BASE_URL: 'http://127.0.0.1:18787', MAX_ROOM_CREATIONS_PER_HOUR: '100',
       PARTY_DB: path.join(os.tmpdir(), `party-e2e-${process.pid}.sqlite`) },
   },
 });

@@ -11,6 +11,7 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://web.stremio.com}
       MAX_ROOMS: ${MAX_ROOMS:-200}
       MAX_PEERS: ${MAX_PEERS:-16}
+      MAX_ROOM_CREATIONS_PER_HOUR: ${MAX_ROOM_CREATIONS_PER_HOUR:-12}
       RELEASES_URL: ${RELEASES_URL:-}
       TRUST_PROXY: ${TRUST_PROXY:-0}
     mem_limit: 128m

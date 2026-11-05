@@ -1,7 +1,8 @@
 const { test, expect } = require('@playwright/test');
 const path = require('node:path');
 const fs = require('node:fs');
-const source = fs.readFileSync(path.resolve('extension/content.js'), 'utf8');
+const { deflateSync } = require('node:zlib');
+const source = fs.readFileSync(path.resolve('extension/torrent.js'), 'utf8') + '\n' + fs.readFileSync(path.resolve('extension/content.js'), 'utf8');
 const SERVER = 'http://127.0.0.1:18787';
 const STREMIO = 'https://web.stremio.com/';
 const player = `<!doctype html><style>body{background:#141827;color:white;font:16px system-ui}video{width:640px}</style>
@@ -11,7 +12,7 @@ const player = `<!doctype html><style>body{background:#141827;color:white;font:1
   document.querySelector('#native').onclick=()=>document.body.dataset.native='clicked';
   document.querySelector('#fullscreen').onclick=()=>document.querySelector('#player').requestFullscreen();</script>`;
 
-async function viewer(browser, { configured = true, room = null } = {}) {
+async function viewer(browser, { configured = true, room = null, noVideo = false, legacy = false } = {}) {
   const context = await browser.newContext();
   if (browser.browserType().name() === 'chromium') {
     await context.grantPermissions(['local-network-access'], { origin: STREMIO });
@@ -20,7 +21,7 @@ async function viewer(browser, { configured = true, room = null } = {}) {
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   await context.route('https://web.stremio.com/**', route => {
-    if (!route.request().url().includes('fixture.webm')) return route.fulfill({ body: player, contentType: 'text/html' });
+    if (!route.request().url().includes('fixture.webm')) return route.fulfill({ body: noVideo ? player.replace(/<video.*?<\/video>/, '') : player, contentType: 'text/html' });
     const video = fs.readFileSync(path.resolve('tests/fixtures/video.webm'));
     const range = route.request().headers().range?.match(/^bytes=(\d+)-(\d*)$/);
     const start = range ? Number(range[1]) : 0;
@@ -30,7 +31,7 @@ async function viewer(browser, { configured = true, room = null } = {}) {
         ...(range ? { 'Content-Range': `bytes ${start}-${end}/${video.length}` } : {}) } });
   });
   // Only the extension APIs are simulated. Video, DOM, WebSockets and server are real.
-  await context.addInitScript(() => {
+  await context.addInitScript(({ legacy }) => {
     const attach = Element.prototype.attachShadow;
     Element.prototype.attachShadow = function (options) {
       const shadow = attach.call(this, options);
@@ -46,14 +47,22 @@ async function viewer(browser, { configured = true, room = null } = {}) {
     window.sockets = [];
     window.WebSocket = class extends Socket {
       constructor(...args) { super(...args); window.sockets.push(this); }
+      addEventListener(type, listener, options) {
+        if (type !== 'message' || !legacy) return super.addEventListener(type, listener, options);
+        return super.addEventListener(type, event => {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'joined') delete msg.features;
+          listener.call(this, new MessageEvent('message', { data: JSON.stringify(msg) }));
+        }, options);
+      }
     };
-  });
+  }, { legacy });
   const url = new URL(STREMIO);
   if (configured) url.searchParams.set('partyServer', SERVER);
   if (room) url.searchParams.set('partyRoom', room);
   url.hash = '/player/encoded-stream/series/tt1234567/tt1234567%3A1%3A9';
   await page.goto(url.href);
-  await page.waitForFunction(() => document.querySelector('video').readyState >= 3);
+  if (!noVideo) await page.waitForFunction(() => document.querySelector('video').readyState >= 3);
   await page.evaluate(source);
   await page.waitForFunction(() => !!window.partyTestRoot.querySelector('#nickname').value);
   await page.evaluate(() => window.toolbar({ type: 'open-stremio-party:toggle' }, {}, () => {}));
@@ -82,6 +91,112 @@ async function media(page, properties) {
   }, properties);
 }
 async function value(page, property) { return page.$eval('video', (v, p) => v[p], property); }
+
+function torrentHash(infoHash, fileIdx) {
+  const stream = { infoHash, fileIdx, announce: ['https://tracker.example/private-key'],
+    behaviorHints: { proxyHeaders: { request: { Authorization: 'do-not-forward' } } } };
+  return '#/player/' + encodeURIComponent(deflateSync(JSON.stringify(stream)).toString('base64')) +
+    '/addon/meta/series/tt1234567/tt1234567%3A1%3A9';
+}
+async function currentTorrent(page) { return page.evaluate(() => OpenStremioPartyTorrent.read(location.hash)); }
+
+test('host Sync opens the exact torrent for a viewer without video, then syncs when ready', async ({ browser }) => {
+  const host = await viewer(browser); let guest;
+  try {
+    const code = await create(host.page);
+    guest = await viewer(browser, { room: code, noVideo: true });
+    await expect.poll(() => text(guest.page, 'members')).toBe('2 watching');
+    const infoHash = 'a'.repeat(40);
+    await host.page.evaluate(hash => { location.hash = hash; }, torrentHash(infoHash, 8));
+    await media(host.page, { position: 22, paused: true });
+    await click(host.page, 'resync');
+    await expect.poll(() => currentTorrent(guest.page)).toEqual({ infoHash, fileIdx: 8 });
+    expect(await guest.page.locator('video').count()).toBe(0);
+    await guest.page.evaluate(() => {
+      const v = document.createElement('video'); v.muted = true; v.src = '/fixture.webm';
+      document.querySelector('#player').prepend(v);
+    });
+    await expect.poll(() => value(guest.page, 'currentTime')).toBeCloseTo(22, 0);
+    expect(await value(guest.page, 'paused')).toBe(true);
+    const route = await guest.page.url();
+    expect(route).not.toContain('private-key'); expect(route).not.toContain('do-not-forward');
+    await guest.page.evaluate(() => { document.querySelector('video').dataset.instance = 'original'; });
+    await click(host.page, 'resync');
+    await expect.poll(() => text(guest.page, 'notice')).toContain('Same torrent');
+    expect(await guest.page.url()).toBe(route);
+    expect(await guest.page.locator('video').getAttribute('data-instance')).toBe('original');
+    expect(host.errors.concat(guest.errors)).toEqual([]);
+  } finally { await guest?.context.close(); await host.context.close(); }
+});
+
+test('guest Sync requests the host current torrent and navigates only that guest', async ({ browser }) => {
+  const host = await viewer(browser); let guest, other;
+  try {
+    const code = await create(host.page);
+    guest = await viewer(browser, { room: code });
+    other = await viewer(browser, { room: code });
+    await expect.poll(() => text(host.page, 'members')).toBe('3 watching');
+    const infoHash = 'b'.repeat(40);
+    await host.page.evaluate(hash => { location.hash = hash; }, torrentHash(infoHash, 3));
+    await click(guest.page, 'resync');
+    await expect.poll(() => currentTorrent(guest.page)).toEqual({ infoHash, fileIdx: 3 });
+    expect(await currentTorrent(other.page)).toBeNull();
+    expect(await text(guest.page, 'notice')).toContain('Opening');
+    expect(host.errors.concat(guest.errors, other.errors)).toEqual([]);
+  } finally { await other?.context.close(); await guest?.context.close(); await host.context.close(); }
+});
+
+test('Sync waits for a reused video element to load the new source', async ({ browser }) => {
+  const host = await viewer(browser); let guest;
+  try {
+    const code = await create(host.page);
+    guest = await viewer(browser, { room: code });
+    await expect.poll(() => text(guest.page, 'members')).toBe('2 watching');
+    await host.page.evaluate(hash => { location.hash = hash; }, torrentHash('c'.repeat(40), 12));
+    await media(host.page, { position: 31, paused: true });
+    await click(host.page, 'resync');
+    await expect.poll(() => currentTorrent(guest.page)).toEqual({ infoHash: 'c'.repeat(40), fileIdx: 12 });
+    // Old metadata must not receive the new stream's seek before its source changes.
+    expect(await value(guest.page, 'currentTime')).toBe(0);
+    await guest.page.$eval('video', v => { v.src = '/fixture.webm?new-source=1'; });
+    await expect.poll(() => value(guest.page, 'currentTime')).toBeCloseTo(31, 0);
+    expect(guest.errors.concat(host.errors)).toEqual([]);
+  } finally { await guest?.context.close(); await host.context.close(); }
+});
+
+test('legacy server Sync explains the required upgrade', async ({ browser }) => {
+  const host = await viewer(browser, { legacy: true });
+  try {
+    await create(host.page);
+    await click(host.page, 'resync');
+    await expect.poll(() => text(host.page, 'notice')).toContain('Update the party server');
+    expect(await host.page.evaluate(() => partyTestRoot.querySelector('#inside').hidden)).toBe(false);
+  } finally { await host.context.close(); }
+});
+
+test('leaving while a torrent selection is decoding cancels the navigation', async ({ browser }) => {
+  const host = await viewer(browser); let guest;
+  try {
+    const code = await create(host.page);
+    guest = await viewer(browser, { room: code });
+    await expect.poll(() => text(guest.page, 'members')).toBe('2 watching');
+    await guest.page.evaluate(() => {
+      const read = OpenStremioPartyTorrent.read;
+      OpenStremioPartyTorrent.read = async hash => {
+        document.body.dataset.decoding = 'true';
+        await new Promise(resolve => setTimeout(resolve, 500)); return read(hash);
+      };
+    });
+    const original = await guest.page.url();
+    await host.page.evaluate(hash => { location.hash = hash; }, torrentHash('d'.repeat(40), 1));
+    await click(host.page, 'resync');
+    await expect(guest.page.locator('body')).toHaveAttribute('data-decoding', 'true');
+    await click(guest.page, 'leave');
+    await guest.page.waitForTimeout(650);
+    expect(await guest.page.url()).toBe(original);
+    expect(await guest.page.evaluate(() => partyTestRoot.querySelector('#inside').hidden)).toBe(true);
+  } finally { await guest?.context.close(); await host.context.close(); }
+});
 
 test('first-time server setup and native controls', async ({ browser }) => {
   const v = await viewer(browser, { configured: false });

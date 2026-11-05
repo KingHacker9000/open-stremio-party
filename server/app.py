@@ -21,11 +21,13 @@ ROOM_RE = re.compile(r"^[A-HJ-NP-Z2-9]{10}$")
 MEDIA_RE = re.compile(r"^[A-Za-z0-9:_-]{1,100}$")
 MAX_PEERS = int(os.getenv("MAX_PEERS", "16"))
 MAX_ROOMS = int(os.getenv("MAX_ROOMS", "200"))
+MAX_ROOM_CREATIONS_PER_HOUR = int(os.getenv('MAX_ROOM_CREATIONS_PER_HOUR', '12'))
 ROOM_LIFETIME = 24 * 3600
 DB_PATH = os.getenv("PARTY_DB", "/data/party.sqlite")
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8787").rstrip("/")
 ALLOWED_ORIGINS = set(os.getenv("ALLOWED_ORIGINS", "https://web.stremio.com").split(","))
 HERE = Path(__file__).resolve().parent.parent
+PROTOCOL_FEATURES = ['torrent-selection']
 
 
 def now_ms():
@@ -51,6 +53,33 @@ def bounded_number(value, lo, hi):
     return float(value)
 
 
+def clean_torrent(value):
+    if not isinstance(value, dict):
+        return None
+    info_hash, index = value.get('infoHash'), value.get('fileIdx')
+    if not isinstance(info_hash, str) or not re.fullmatch(r'[a-fA-F0-9]{40}', info_hash):
+        return None
+    if index is not None and (type(index) is not int or not 0 <= index <= 65535):
+        return None
+    return {'infoHash': info_hash.lower(), 'fileIdx': index}
+
+
+def clean_playback(state):
+    if not isinstance(state, dict):
+        return None
+    position = bounded_number(state.get('position'), 0, 864000)
+    duration = bounded_number(state.get('duration'), 0, 864000)
+    speed = bounded_number(state.get('speed'), 0.25, 3)
+    if position is None or duration is None or speed is None or type(state.get('paused')) is not bool:
+        return None
+    if duration <= 0 or position > duration:
+        return None
+    media = state.get('mediaId')
+    if media is not None and (not isinstance(media, str) or not MEDIA_RE.fullmatch(media)):
+        media = None
+    return {'position': position, 'duration': duration, 'speed': speed, 'paused': state['paused'], 'mediaId': media}
+
+
 @dataclass(eq=False)
 class Peer:
     ws: web.WebSocketResponse
@@ -70,6 +99,7 @@ class Room:
     clients: dict = field(default_factory=dict)
     messages: deque = field(default_factory=lambda: deque(maxlen=40))
     snapshot: dict | None = None
+    selection: dict | None = None
     sequence: int = 0
     last_db_touch: float = 0
 
@@ -184,6 +214,7 @@ class PartyApp:
             "type": "joined", "code": room.code, "peerId": peer.peer_id, "host": host,
             "hostToken": token, "inviteUrl": f"{BASE_URL}/r/{room.code}",
             "mode": room.mode, "snapshot": room.current_snapshot(),
+            "features": PROTOCOL_FEATURES, "selection": room.selection,
             "messages": list(room.messages), "roster": room.roster(),
         })
         await self.broadcast(room, room.roster())
@@ -243,9 +274,9 @@ class PartyApp:
                                 ip = forwarded
                             except ValueError:
                                 pass
-                        limit = self.creation_attempts.setdefault(ip, deque(maxlen=12))
+                        limit = self.creation_attempts.setdefault(ip, deque(maxlen=MAX_ROOM_CREATIONS_PER_HOUR))
                         stamp = time.monotonic()
-                        if len([t for t in limit if t > stamp - 3600]) >= 12:
+                        if len([t for t in limit if t > stamp - 3600]) >= MAX_ROOM_CREATIONS_PER_HOUR:
                             await ws.send_json({"type": "error", "message": "Too many rooms created. Try again later."})
                             continue
                         limit.append(stamp)
@@ -294,31 +325,49 @@ class PartyApp:
                             "text": value.strip(), "ts": now_ms()}
                     room.messages.append(item)
                     await self.broadcast(room, item)
+                elif typ == 'request-selection':
+                    hosts = [p for p in room.clients.values() if p.host]
+                    if not hosts:
+                        await self.emit(peer, {'type': 'error', 'fatal': False, 'message': 'The host is offline. Try Sync when they return.'})
+                    for host in hosts:
+                        await self.emit(host, {'type': 'selection-request', 'peerId': peer.peer_id})
+                elif typ == 'select':
+                    source = clean_torrent(msg.get('source')) if msg.get('source') is not None else None
+                    if not peer.host or (msg.get('source') is not None and source is None):
+                        await self.emit(peer, {'type': 'error', 'fatal': False, 'message': 'Only the host can share a valid torrent selection.'})
+                        continue
+                    media = msg.get('mediaId')
+                    if not isinstance(media, str) or not MEDIA_RE.fullmatch(media):
+                        media = None
+                    target = msg.get('targetPeer')
+                    recipients = [p for p in room.clients.values() if not p.host and (target is None or p.peer_id == target)]
+                    if target is not None and not recipients:
+                        continue
+                    if source != (room.selection or {}).get('source'):
+                        room.snapshot = None
+                    room.selection = {'source': source, 'mediaId': media}
+                    playback = clean_playback(msg.get('state'))
+                    if playback:
+                        room.sequence += 1
+                        room.snapshot = {**playback, 'seq': room.sequence, 'serverTs': now_ms(), 'fromPeer': peer.peer_id}
+                    else:
+                        room.snapshot = None
+                    payload = {'type': 'selection', **room.selection, 'state': room.current_snapshot()}
+                    await asyncio.gather(*(self.emit(p, payload) for p in recipients))
+                    await self.emit(peer, {'type': 'selection-sent', 'torrent': source is not None, 'recipients': len(recipients)})
                 elif typ == "sync":
                     if not (peer.host or room.mode == "everyone"):
                         continue
-                    state = msg.get("state")
-                    if not isinstance(state, dict):
+                    state = clean_playback(msg.get('state'))
+                    if state is None:
                         continue
-                    position = bounded_number(state.get("position"), 0, 864000)
-                    duration = bounded_number(state.get("duration"), 0, 864000)
-                    speed = bounded_number(state.get("speed"), 0.25, 3)
-                    paused = state.get("paused")
-                    media = state.get("mediaId")
-                    if position is None or duration is None or speed is None or type(paused) is not bool:
-                        continue
-                    if duration <= 0 or position > duration:
-                        continue
-                    if media is not None and (not isinstance(media, str) or not MEDIA_RE.fullmatch(media)):
-                        media = None
                     if time.monotonic() - room.last_db_touch > 60:
                         self.db.execute("UPDATE rooms SET expires_at=? WHERE code=?",
                                         (int(time.time()) + ROOM_LIFETIME, room.code))
                         self.db.commit()
                         room.last_db_touch = time.monotonic()
                     room.sequence += 1
-                    room.snapshot = {"position": position, "duration": duration,
-                                     "speed": speed, "paused": paused, "mediaId": media,
+                    room.snapshot = {**state,
                                      "seq": room.sequence, "serverTs": now_ms(),
                                      "fromPeer": peer.peer_id}
                     await self.broadcast(room, {"type": "sync", "state": room.snapshot}, ws)
@@ -360,7 +409,7 @@ async def create_app(db_path=DB_PATH):
 
 
 async def healthz(request):
-    return web.json_response({"ok": True, "service": "open-stremio-party"})
+    return web.json_response({"ok": True, "service": "open-stremio-party", 'version': '0.2.0', 'features': PROTOCOL_FEATURES})
 
 
 async def public_config(request):
