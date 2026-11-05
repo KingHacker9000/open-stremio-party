@@ -197,6 +197,10 @@ async def test_torrent_selection_requests_permissions_and_public_fields(tmp_path
             for index in (-1, True, 1.5, 65536):
                 await host.send_json({'type': 'select', 'source': {'infoHash': 'a' * 40, 'fileIdx': index}})
                 assert (await event_of_type(host, 'error'))['fatal'] is False
+            # Drain host acknowledgements before closing: aiohttp's client close
+            # can race queued incoming frames and abort the close handshake.
+            await host.send_json({'type': 'ping'})
+            await event_of_type(host, 'pong')
             await host.close()
             await event_of_type(guest, 'roster')
             await guest.send_json({'type': 'request-selection'})
